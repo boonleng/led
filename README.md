@@ -1,7 +1,7 @@
 LED Strip Using PWM
 ===================
 
-LED Strip lighting using PWM for color intensity.
+LED strip lighting using a Raspberry Pi through PIGPIO Library for PWM to control RGB color and intensity.
 
 ### Requirements ###
 
