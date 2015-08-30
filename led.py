@@ -2,9 +2,10 @@ import sys
 import time
 import pigpio
 
-RED=27
-GREEN=22
-BLUE=17
+RED=22
+BLUE=27
+GREEN=17
+MAX_RANGE=255
 
 def set_color(red_intensity, green_intensity, blue_intensity):
     pi.set_PWM_dutycycle(RED, red_intensity);
@@ -13,7 +14,7 @@ def set_color(red_intensity, green_intensity, blue_intensity):
 
 def color_circle(sleep=0.01):
     # assume, maximum brightness & saturation
-    c = 0.25
+    c = 1.0
 
     for k in range(0, 360):
         h = k / 60.0;
@@ -32,7 +33,7 @@ def color_circle(sleep=0.01):
         else:
             r = c; g = 0; b = x;
         # print 'k=%3.0f  h=%6.3f  c=%6.3f  x=%6.3f  (r=%5.2f g=%5.2f b=%5.2f)' % (k, h, c, x, r, g, b);
-        set_color(r * 100.0, g * 100.0, b * 100.0);
+        set_color(r * MAX_RANGE, g * MAX_RANGE, b * MAX_RANGE);
         time.sleep(sleep)
 
 
@@ -41,19 +42,19 @@ def color_circle(sleep=0.01):
 pi = pigpio.pi();
 
 # initialize the range to be 0 to 1000
-pi.set_PWM_range(RED, 100);
-pi.set_PWM_range(GREEN, 100);
-pi.set_PWM_range(BLUE, 100);
+pi.set_PWM_range(RED, MAX_RANGE);
+pi.set_PWM_range(GREEN, MAX_RANGE);
+pi.set_PWM_range(BLUE, MAX_RANGE);
 
 
-for k in range(0, 100):
+for k in range(0, MAX_RANGE):
     set_color(k, 0, 0)
 
-for k in range(0, 10):
+for k in range(0, MAX_RANGE):
     color_circle()
 
-for k in range(0, 100):
-    set_color(100 - k, 0, 0)
+for k in range(0, MAX_RANGE):
+    set_color(MAX_RANGE - k, 0, 0)
 
 set_color(0, 0, 0)
 
