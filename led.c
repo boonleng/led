@@ -164,7 +164,7 @@ void shiftColor(const useconds_t wait, const color_t colorStart, const color_t c
 
     led_run = 1;
 
-    for (k = 0.0f; k <= 1.0f; k += 0.002f) {
+    for (k = 0.0f; k <= 1.0f; k += 0.005f) {
         tmp.s0 = colorStart.s0 - k * (colorStart.s0 - colorEnd.s0);
         tmp.s1 = colorStart.s1 - k * (colorStart.s1 - colorEnd.s1);
         tmp.s2 = colorStart.s2 - k * (colorStart.s2 - colorEnd.s2);
@@ -214,12 +214,12 @@ int main(int argc, char *argv[]) {
     signal(SIGQUIT, catchSignal);
     
     // Some simple test to make sure RGB colors are correct
-    setColor(RED_COLOR);
-    usleep(200000);
-    setColor(GREEN_COLOR);
-    usleep(200000);
-    setColorInFloat(0, 0, PWM_RANGE);
-    usleep(200000);
+    //setColor(RED_COLOR);
+    //usleep(200000);
+    //setColor(GREEN_COLOR);
+    //usleep(200000);
+    //setColorInFloat(0, 0, PWM_RANGE);
+    //usleep(200000);
 
     // Some color variables
     color_t prevHSVColor = {{0.0f}, {1.0f}, {1.0f}};
@@ -227,14 +227,16 @@ int main(int argc, char *argv[]) {
     color_t  newRGBColor = BLACK_COLOR;
 
     // Cycle through the color wheel
-    cycleColor(3000);
+    //cycleColor(3000);
     
+    //shiftColor(1000, getColor(), CYAN_COLOR, kColorTypeRGB);
+
     while (led_run) {
         //cycleColor(10000);
         //breath(10000, 0.6f, 1.0f, 1.0f);
         //breath(10000, 0.65f, 1.0f, 0.0f);
         //breath(10000, 0.2f, 1.0f, 1.0f);
-        newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
+        newHSVColor.hue = fmodf(newHSVColor.hue + 0.05f * (float)(rand()) / RAND_MAX, 1.0f);
         
         newRGBColor = hsv2rgb(newHSVColor);
 
@@ -251,11 +253,11 @@ int main(int argc, char *argv[]) {
     }
     
     // Fade to black
-    shiftColor(500, getColor(), BLACK_COLOR, kColorTypeRGB);
+    shiftColor(1000, getColor(), BLACK_COLOR, kColorTypeRGB);
 
     // Conclude the GPIO library
     gpioTerminate();
     
-	return EXIT_SUCCESS;
+    return EXIT_SUCCESS;
 }
 
