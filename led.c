@@ -4,10 +4,14 @@
 #include <math.h>
 #include <signal.h>
 #include <pigpio.h>
+#include <semaphore.h>
 
-#define RED_PIN                22
-#define BLUE_PIN               27
-#define GREEN_PIN              17
+#include "ps.h"
+
+#define RED_PIN                19
+#define BLUE_PIN               13
+#define GREEN_PIN              26
+#define WHITE_PIN              6
 #define PWM_RANGE              500
 #define PWM_FREQUENCY          800
 #define EXP_INVERSE            0.36787944117144f
@@ -29,8 +33,6 @@
 #ifndef MAX
 #define MAX(x, y)               ((x) > (y) ? (x) : (y))
 #endif
-
-int led_run = 1;
 
 typedef struct color {
     union {
@@ -56,6 +58,11 @@ typedef struct color {
         float value;
         float lightness;
     };
+    union {
+        float w;
+        float s3;
+        float white;
+    };
 } color_t;
 
 typedef char colorType;
@@ -64,6 +71,14 @@ enum {
     kColorTypeHSV = 1
 };
 
+// Global variables
+int led_run = 1;
+color_t prevHSVColor;
+color_t newHSVColor;
+color_t newRGBColor;
+sem_t lock;
+
+// Function prototypes
 void showColorValues(const color_t color, const char *label);
 void setColor(const color_t color);
 color_t getColor(void);
@@ -75,17 +90,19 @@ void showColorValues(const color_t color, const char *label) {
 }
 
 
-void setColorInFloat(const int r, const int g, const int b) {
+void setColorInFloat(const int r, const int g, const int b, const int w) {
     gpioPWM(RED_PIN, r);
     gpioPWM(BLUE_PIN, b);
     gpioPWM(GREEN_PIN, g);
+    gpioPWM(WHITE_PIN, w);
 }
 
 
 void setColor(const color_t color) {
     return setColorInFloat((int)(PWM_RANGE * color.red),
                            (int)(PWM_RANGE * color.green),
-                           (int)(PWM_RANGE * color.blue));
+                           (int)(PWM_RANGE * color.blue),
+                           (int)(PWM_RANGE * color.white));
 }
 
 
@@ -93,12 +110,13 @@ color_t getColor(void) {
     int r = gpioGetPWMdutycycle(RED_PIN);
     int b = gpioGetPWMdutycycle(BLUE_PIN);
     int g = gpioGetPWMdutycycle(GREEN_PIN);
-    return (color_t){{(float)r / PWM_RANGE}, {(float)g / PWM_RANGE}, {(float)b / PWM_RANGE}};
+    int w = gpioGetPWMdutycycle(WHITE_PIN);
+    return (color_t){{(float)r / PWM_RANGE}, {(float)g / PWM_RANGE}, {(float)b / PWM_RANGE}, {(float)w / PWM_RANGE}};
 }
 
 
 color_t hsv2rgb(const color_t input) {
-    color_t output = {{0.0f}, {0.0f}, {0.0f}};
+    color_t output = {{0.0f}, {0.0f}, {0.0f}, {0.0f}};
     float c = input.v * input.s;
     float x = c * (1.0f - fabs(fmod(input.h * 6.0f, 2.0f) - 1.0));
     // Hue dependent piece-wise function
@@ -138,7 +156,7 @@ void cycleColor(const useconds_t wait) {
 }
 
 color_t breath(const useconds_t wait, const color_t color) {
-    int r = 0, g = 0, b = 0;
+    int r = 0, g = 0, b = 0, w = 0;
     float f, k;
     const float I = 1.0f - BREATH_LOW_INTENSITY;
     
@@ -149,7 +167,8 @@ color_t breath(const useconds_t wait, const color_t color) {
         r = (int)(PWM_RANGE * f * color.red);
         g = (int)(PWM_RANGE * f * color.green);
         b = (int)(PWM_RANGE * f * color.blue);
-        setColorInFloat(r, g, b);
+        w = (int)(PWM_RANGE * f * color.white);
+        setColorInFloat(r, g, b, w);
         if (!led_run) {
             break;
         }
@@ -162,12 +181,11 @@ void shiftColor(const useconds_t wait, const color_t colorStart, const color_t c
     float k;
     color_t color, tmp;
 
-    led_run = 1;
-
     for (k = 0.0f; k <= 1.0f; k += 0.002f) {
         tmp.s0 = colorStart.s0 - k * (colorStart.s0 - colorEnd.s0);
         tmp.s1 = colorStart.s1 - k * (colorStart.s1 - colorEnd.s1);
         tmp.s2 = colorStart.s2 - k * (colorStart.s2 - colorEnd.s2);
+        tmp.s3 = colorStart.s3 - k * (colorStart.s3 - colorEnd.s3);
         if (type == kColorTypeHSV) {
             color = hsv2rgb(tmp);
         } else {
@@ -189,12 +207,50 @@ void catchSignal() {
 }
 
 
+int handle_command(PS_attendant *A) {
+    int k, v;
+    char str[8];
+    color_t currentRGBColor;
+    sem_getvalue(&lock, &v);
+    printf("Command %s  (lock = %d)\n", A->cmd, v);
+    sem_wait(&lock);
+    printf("Processing command ...\n");
+    switch (A->cmd[0]) {
+        case 'a':
+            led_run = 1;
+            break;
+        case 'c':
+        case 'C':
+            led_run = 2;
+            k = sscanf(A->cmd, "%s %f %f %f %f", str, &newRGBColor.red, &newRGBColor.green, &newRGBColor.blue, &newRGBColor.w);
+            if (k == 5) {
+                //printf("Shifting to new RGBW color %.2f %.2f %.2f %.2f\n", newRGBColor.red, newRGBColor.green, newRGBColor.blue, newRGBColor.white);
+                if (A->cmd[0] == 'c') {
+                    currentRGBColor = getColor();
+                    shiftColor(1000, currentRGBColor, newRGBColor, kColorTypeRGB);
+                } else {
+                    setColor(newRGBColor);
+                }
+            } else {
+                printf("Incomplete command '%s'.\n", A->cmd);
+            }
+            break;
+        default:
+            break;
+    }
+    sem_post(&lock);
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     
     // Initialize the GPIO library
     if (gpioInitialise() < 0) {
         return EXIT_FAILURE;
     }
+    gpioSetPWMrange(6, PWM_RANGE);
+    gpioSetMode(6, PI_OUTPUT);
+    gpioPWM(6, 1);
     
     // Prepare output pins
     gpioSetPWMrange(RED_PIN,   PWM_RANGE);
@@ -212,43 +268,79 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, catchSignal);
     signal(SIGKILL, catchSignal);
     signal(SIGQUIT, catchSignal);
-    
-    // Some simple test to make sure RGB colors are correct
-    setColor(RED_COLOR);
+
+    setColor(BLACK_COLOR);
+
+    gpioPWM(WHITE_PIN, PWM_RANGE);
     usleep(200000);
-    setColor(GREEN_COLOR);
-    usleep(200000);
-    setColorInFloat(0, 0, PWM_RANGE);
-    usleep(200000);
+    gpioPWM(WHITE_PIN, 0);
 
     // Some color variables
-    color_t prevHSVColor = {{0.0f}, {1.0f}, {1.0f}};
-    color_t  newHSVColor = {{0.5f}, {1.0f}, {1.0f}};
-    color_t  newRGBColor = BLACK_COLOR;
+    prevHSVColor.h = 0.0f;    prevHSVColor.s = 1.0f;    prevHSVColor.v = 1.0;
+    newHSVColor.h  = 0.0f;     newHSVColor.s = 1.0f;     newHSVColor.v = 1.0;
+    newRGBColor  = hsv2rgb(newHSVColor);
+
+    if (argc > 1) {
+        float h = atof(argv[1]);
+        printf("Start with hue = %.2f\n", h);
+        newHSVColor.h = h;
+    }
 
     // Cycle through the color wheel
-    cycleColor(3000);
+    //cycleColor(3000);
+
+    shiftColor(1000,
+               BLACK_COLOR,
+               hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+               kColorTypeRGB);
+    
+    // Keep a copy as "previous"
+    prevHSVColor.hue = newHSVColor.hue;
+
+//    // Fade to black
+//    shiftColor(500, getColor(), BLACK_COLOR, kColorTypeRGB);
+//    
+//    // Conclude the GPIO library
+//    gpioTerminate();
+//    return 0;
+    
+    sem_init(&lock, 0, 1);
+
+    PS_server *S = PS_init();
+    PS_set_terminate_function_to_builtin(S);
+    PS_set_command_function(S, &handle_command);
+    PS_set_name_and_logfile(S, "LED", "led.log");
+    S->port = 10000;
+    PS_run(S);
     
     while (led_run) {
-        //cycleColor(10000);
-        //breath(10000, 0.6f, 1.0f, 1.0f);
-        //breath(10000, 0.65f, 1.0f, 0.0f);
-        //breath(10000, 0.2f, 1.0f, 1.0f);
-        newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
-        
-        newRGBColor = hsv2rgb(newHSVColor);
+        if (led_run == 1) {
+            sem_wait(&lock);
 
-        //shiftColor(2000, prevHSVColor, newHSVColor, kColorTypeHSV);
-        
-        shiftColor(1000,
-                   hsv2rgb((color_t){{prevHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
-                   hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
-                   kColorTypeRGB);
+            newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
+            
+            newRGBColor = hsv2rgb(newHSVColor);
+            
+            //shiftColor(2000, prevHSVColor, newHSVColor, kColorTypeHSV);
+            
+            shiftColor(1000,
+                       hsv2rgb((color_t){{prevHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+                       hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+                       kColorTypeRGB);
+            
+            breath(10000, newRGBColor);
+            
+            prevHSVColor.hue = newHSVColor.hue;
 
-        breath(10000, newRGBColor);
-
-        prevHSVColor.hue = newHSVColor.hue;
+            sem_post(&lock);
+            
+            usleep(10);
+        } else {
+            sleep(1);
+        }
     }
+    
+    sem_destroy(&lock);
     
     // Fade to black
     shiftColor(500, getColor(), BLACK_COLOR, kColorTypeRGB);
@@ -256,6 +348,6 @@ int main(int argc, char *argv[]) {
     // Conclude the GPIO library
     gpioTerminate();
     
-	return EXIT_SUCCESS;
+    return EXIT_SUCCESS;
 }
 
