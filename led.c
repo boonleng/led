@@ -269,12 +269,6 @@ int main(int argc, char *argv[]) {
     signal(SIGKILL, catchSignal);
     signal(SIGQUIT, catchSignal);
 
-    setColor(BLACK_COLOR);
-
-    gpioPWM(WHITE_PIN, PWM_RANGE);
-    usleep(200000);
-    gpioPWM(WHITE_PIN, 0);
-
     // Some color variables
     prevHSVColor.h = 0.0f;    prevHSVColor.s = 1.0f;    prevHSVColor.v = 1.0;
     newHSVColor.h  = 0.0f;     newHSVColor.s = 1.0f;     newHSVColor.v = 1.0;
@@ -313,6 +307,8 @@ int main(int argc, char *argv[]) {
     S->port = 10000;
     PS_run(S);
     
+    //shiftColor(1000, getColor(), CYAN_COLOR, kColorTypeRGB);
+
     while (led_run) {
         if (led_run == 1) {
             sem_wait(&lock);
@@ -343,7 +339,7 @@ int main(int argc, char *argv[]) {
     sem_destroy(&lock);
     
     // Fade to black
-    shiftColor(500, getColor(), BLACK_COLOR, kColorTypeRGB);
+    shiftColor(1000, getColor(), BLACK_COLOR, kColorTypeRGB);
 
     // Conclude the GPIO library
     gpioTerminate();
