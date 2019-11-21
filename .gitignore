@@ -34,6 +34,9 @@
 # Remote desktop files
 ._*
 
+# Other folders
+ps
+
 # Target files
 led
 

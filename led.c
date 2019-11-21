@@ -6,91 +6,43 @@
 #include <pigpio.h>
 #include <semaphore.h>
 
+#include "color.h"
 #include "ps.h"
 
 #define RED_PIN                19
 #define BLUE_PIN               13
 #define GREEN_PIN              26
 #define WHITE_PIN              6
-#define PWM_RANGE              500
-#define PWM_FREQUENCY          800
+#define PWM_RANGE              99
+#define PWM_FREQUENCY          480
 #define EXP_INVERSE            0.36787944117144f
 #define EXP_MINUX_EXP_INVERSE  2.35040238728760f
 #define BREATH_LOW_INTENSITY   0.1f
-
-#define RED_COLOR              (color_t) {{1.0}, {0.0}, {0.0}}
-#define BLUE_COLOR             (color_t) {{0.0}, {0.0}, {1.0}}
-#define GREEN_COLOR            (color_t) {{0.0}, {1.0}, {0.0}}
-#define YELLOW_COLOR           (color_t) {{1.0}, {1.0}, {0.0}}
-#define MAGENTA_COLOR          (color_t) {{0.0}, {0.0}, {1.0}}
-#define CYAN_COLOR             (color_t) {{0.0}, {1.0}, {1.0}}
-#define WHITE_COLOR            (color_t) {{1.0}, {1.0}, {1.0}}
-#define BLACK_COLOR            (color_t) {{0.0}, {0.0}, {0.0}}
-
-#ifndef MIN
-#define MIN(x, y)               ((x) < (y) ? (x) : (y))
-#endif
-#ifndef MAX
-#define MAX(x, y)               ((x) > (y) ? (x) : (y))
-#endif
-
-typedef struct color {
-    union {
-        float r;
-        float h;
-        float s0;
-        float red;
-        float hue;
-    };
-    union {
-        float g;
-        float s;
-        float s1;
-        float green;
-        float saturation;
-    };
-    union {
-        float b;
-        float v;
-        float l;
-        float s2;
-        float blue;
-        float value;
-        float lightness;
-    };
-    union {
-        float w;
-        float s3;
-        float white;
-    };
-} color_t;
-
-typedef char colorType;
-enum {
-    kColorTypeRGB = 0,
-    kColorTypeHSV = 1
-};
 
 // Global variables
 int led_run = 1;
 color_t prevHSVColor;
 color_t newHSVColor;
-color_t newRGBColor;
+color_t newRGBColor = {
+    .white = 1.0f
+};
 sem_t lock;
 
-// Function prototypes
-void showColorValues(const color_t color, const char *label);
-void setColor(const color_t color);
-color_t getColor(void);
-color_t hsv2rgb(const color_t input);
-
 // Function implementations
-void showColorValues(const color_t color, const char *label) {
+static void waitWhileActive(const float seconds) {
+    const uint32_t count = (uint32_t)(100.0f * seconds);
+    for (uint32_t k = 0; k < count && led_run; k++) {
+        usleep(10000);
+    }
+}
+
+
+static void showColorValues(const color_t color, const char *label) {
     printf("%s = %.4f %.4f %.4f\n", label, color.r, color.g, color.b);
 }
 
 
-void setColorInFloat(const int r, const int g, const int b, const int w) {
+static void setColorInRGBW(const int r, const int g, const int b, const int w) {
     gpioPWM(RED_PIN, r);
     gpioPWM(BLUE_PIN, b);
     gpioPWM(GREEN_PIN, g);
@@ -98,15 +50,15 @@ void setColorInFloat(const int r, const int g, const int b, const int w) {
 }
 
 
-void setColor(const color_t color) {
-    return setColorInFloat((int)(PWM_RANGE * color.red),
-                           (int)(PWM_RANGE * color.green),
-                           (int)(PWM_RANGE * color.blue),
-                           (int)(PWM_RANGE * color.white));
+static void setColor(const color_t color) {
+    return setColorInRGBW((int)(PWM_RANGE * color.red),
+                          (int)(PWM_RANGE * color.green),
+                          (int)(PWM_RANGE * color.blue),
+                          (int)(PWM_RANGE * color.white));
 }
 
 
-color_t getColor(void) {
+static color_t getColor(void) {
     int r = gpioGetPWMdutycycle(RED_PIN);
     int b = gpioGetPWMdutycycle(BLUE_PIN);
     int g = gpioGetPWMdutycycle(GREEN_PIN);
@@ -115,47 +67,18 @@ color_t getColor(void) {
 }
 
 
-color_t hsv2rgb(const color_t input) {
-    color_t output = {{0.0f}, {0.0f}, {0.0f}, {0.0f}};
-    float c = input.v * input.s;
-    float x = c * (1.0f - fabs(fmod(input.h * 6.0f, 2.0f) - 1.0));
-    // Hue dependent piece-wise function
-    if (input.h < 0.16666666666666f) {
-        output.r = c; output.g = x; output.b = 0;
-    } else if (input.h < 0.33333333333333f) {
-        output.r = x; output.g = c; output.b = 0;
-    } else if (input.h < 0.50000000000000f) {
-        output.r = 0; output.g = c; output.b = x;
-    } else if (input.h < 0.66666666666666f) {
-        output.r = 0; output.g = x; output.b = c;
-    } else if (input.h < 0.83333333333333f) {
-        output.r = x; output.g = 0; output.b = c;
-    } else {
-        output.r = c; output.g = 0; output.b = x;
-    }
-    // Add some amount to each channel to match lightness
-    float m = input.v - c;
-    output.r = MIN(output.r + m, 1.0f);
-    output.g = MIN(output.g + m, 1.0f);
-    output.b = MIN(output.b + m, 1.0f);
-    return output;
-}
-
-void cycleColor(const useconds_t wait) {
+static void cycleColor(const useconds_t wait) {
     float k;
     color_t hsvColor = {{0.0f}, {1.0f}, {1.0f}};
     // Increments of 1.0 / 360.0
-    for (k = 0.0f; k<1.0f; k += 0.00277777777777f) {
+    for (k = 0.0f; k < 1.0f && led_run; k += 0.00277777777777f) {
         hsvColor.h = k;
         setColor(hsv2rgb(hsvColor));
-        if (!led_run) {
-            break;
-        }
         usleep(wait);
     }
 }
 
-color_t breath(const useconds_t wait, const color_t color) {
+static color_t breath(const useconds_t wait, const color_t color) {
     int r = 0, g = 0, b = 0, w = 0;
     float f, k;
     const float I = 1.0f - BREATH_LOW_INTENSITY;
@@ -168,7 +91,7 @@ color_t breath(const useconds_t wait, const color_t color) {
         g = (int)(PWM_RANGE * f * color.green);
         b = (int)(PWM_RANGE * f * color.blue);
         w = (int)(PWM_RANGE * f * color.white);
-        setColorInFloat(r, g, b, w);
+        setColorInRGBW(r, g, b, w);
         if (!led_run) {
             break;
         }
@@ -177,11 +100,11 @@ color_t breath(const useconds_t wait, const color_t color) {
     return (color_t){{r}, {g}, {b}};
 }
 
-void shiftColor(const useconds_t wait, const color_t colorStart, const color_t colorEnd, const colorType type) {
+static void shiftColor(const useconds_t wait, const color_t colorStart, const color_t colorEnd, const colorType type) {
     float k;
     color_t color, tmp;
 
-    for (k = 0.0f; k <= 1.0f; k += 0.002f) {
+    for (k = 0.0f; k <= 1.0f; k += 0.01f) {
         tmp.s0 = colorStart.s0 - k * (colorStart.s0 - colorEnd.s0);
         tmp.s1 = colorStart.s1 - k * (colorStart.s1 - colorEnd.s1);
         tmp.s2 = colorStart.s2 - k * (colorStart.s2 - colorEnd.s2);
@@ -193,21 +116,28 @@ void shiftColor(const useconds_t wait, const color_t colorStart, const color_t c
         }
         // printf("  - k = %.4f  HSV: %.2f %.2f %.2f --> RGB: %d %d %d\n", k, tmp.h, tmp.s, tmp.v, r, g, b);
         setColor(color);
-        if (!led_run) {
-            break;
-        }
         usleep(wait);
     }
 }
 
+static void blink(const color_t color, const float period, const uint8_t count) {
+    int k;
+    for (k = 0; k < count && led_run; k++) {
+        setColorInRGBW(0, 0, 0, 0);
+        waitWhileActive(period);
+        setColor(color);
+        waitWhileActive(period);
+    }
+}
 
-void catchSignal() {
-    printf("Exit nicely ...\n");
+
+static void catchSignal() {
+    printf("\nExit nicely ...\n");
     led_run = 0;
 }
 
 
-int handle_command(PS_attendant *A) {
+static int handleCommand(PS_attendant *A) {
     int k, v;
     char str[8];
     color_t currentRGBColor;
@@ -242,8 +172,12 @@ int handle_command(PS_attendant *A) {
     return 0;
 }
 
+#pragma mark - Main
+
 int main(int argc, char *argv[]) {
     
+    int verbose = 0;
+
     // Initialize the GPIO library
     if (gpioInitialise() < 0) {
         return EXIT_FAILURE;
@@ -253,9 +187,9 @@ int main(int argc, char *argv[]) {
     gpioPWM(6, 1);
     
     // Prepare output pins
-    gpioSetPWMrange(RED_PIN,   PWM_RANGE);
-    gpioSetPWMrange(GREEN_PIN, PWM_RANGE);
-    gpioSetPWMrange(BLUE_PIN,  PWM_RANGE);
+    gpioSetPWMrange(RED_PIN,   PWM_RANGE + 1);
+    gpioSetPWMrange(GREEN_PIN, PWM_RANGE + 1);
+    gpioSetPWMrange(BLUE_PIN,  PWM_RANGE + 1);
     gpioSetMode(RED_PIN,   PI_OUTPUT);
     gpioSetMode(GREEN_PIN, PI_OUTPUT);
     gpioSetMode(BLUE_PIN,  PI_OUTPUT);
@@ -271,7 +205,7 @@ int main(int argc, char *argv[]) {
 
     // Some color variables
     prevHSVColor.h = 0.0f;    prevHSVColor.s = 1.0f;    prevHSVColor.v = 1.0;
-    newHSVColor.h  = 0.0f;     newHSVColor.s = 1.0f;     newHSVColor.v = 1.0;
+    newHSVColor.h  = 0.3f;     newHSVColor.s = 1.0f;     newHSVColor.v = 1.0;
     newRGBColor  = hsv2rgb(newHSVColor);
 
     if (argc > 1) {
@@ -285,7 +219,11 @@ int main(int argc, char *argv[]) {
 
     shiftColor(1000,
                BLACK_COLOR,
-               hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+               hsv2rgb((color_t){
+                   .hue = newHSVColor.h,
+                   .saturation = 1.0f,
+                   .value = BREATH_LOW_INTENSITY
+               }),
                kColorTypeRGB);
     
     // Keep a copy as "previous"
@@ -302,37 +240,51 @@ int main(int argc, char *argv[]) {
 
     PS_server *S = PS_init();
     PS_set_terminate_function_to_builtin(S);
-    PS_set_command_function(S, &handle_command);
+    PS_set_command_function(S, &handleCommand);
     PS_set_name_and_logfile(S, "LED", "led.log");
     S->port = 10000;
     PS_run(S);
     
     //shiftColor(1000, getColor(), CYAN_COLOR, kColorTypeRGB);
 
+    uint8_t mode = 3;
+
     while (led_run) {
-        if (led_run == 1) {
-            sem_wait(&lock);
-
-            newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
-            
-            newRGBColor = hsv2rgb(newHSVColor);
-            
-            //shiftColor(2000, prevHSVColor, newHSVColor, kColorTypeHSV);
-            
-            shiftColor(1000,
-                       hsv2rgb((color_t){{prevHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
-                       hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
-                       kColorTypeRGB);
-            
-            breath(10000, newRGBColor);
-            
-            prevHSVColor.hue = newHSVColor.hue;
-
-            sem_post(&lock);
-            
-            usleep(10);
-        } else {
-            sleep(1);
+        sem_wait(&lock);
+        switch (mode) {
+            case 1:
+                newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
+                newRGBColor = hsv2rgb(newHSVColor);
+                // Change color during the low intensity
+                shiftColor(1000,
+                           hsv2rgb((color_t){{prevHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+                           hsv2rgb((color_t){{newHSVColor.h}, {1.0f}, {BREATH_LOW_INTENSITY}}),
+                           kColorTypeRGB);
+                breath(10000, newRGBColor);
+                prevHSVColor.hue = newHSVColor.hue;
+                usleep(10);
+                break;
+            case 2:
+                cycleColor(10000);
+                break;
+            case 3:
+                blink((color_t) {.r = 1.0f}, 0.2f, 4);
+                blink((color_t) {.g = 1.0f}, 0.2f, 4);
+                blink((color_t) {.r = 1.0f, .g = 1.0f}, 0.2f, 4);
+                break;
+            case 4:
+                blink((color_t) {.red = 1.0f}, 0.04f, 3);
+                waitWhileActive(0.4f);
+                blink((color_t) {.blue = 1.0f}, 0.04f, 3);
+                waitWhileActive(0.4f);
+                break;
+            default:
+                waitWhileActive(1.0f);
+                break;
+        }
+        sem_post(&lock);
+        if (verbose) {
+            showColorValues(newRGBColor, "newRGBColor");
         }
     }
     
