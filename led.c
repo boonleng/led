@@ -18,8 +18,15 @@
 #define EXP_MINUX_EXP_INVERSE  2.35040238728760f
 #define BREATH_LOW_INTENSITY   0.1f
 
+enum {
+    ModeNull,
+    ModeCycleThrough,
+    ModeMellow,
+    ModePersistent
+};
+
 // Global variables
-int led_run = 1;
+int mode = ModeCycleThrough;
 color_t prevHSVColor;
 color_t newHSVColor;
 color_t newRGBColor = {
@@ -29,7 +36,7 @@ color_t newRGBColor = {
 // Function implementations
 static void waitWhileActive(const float seconds) {
     const uint32_t count = (uint32_t)(100.0f * seconds);
-    for (uint32_t k = 0; k < count && led_run; k++) {
+    for (uint32_t k = 0; k < count && mode; k++) {
         usleep(10000);
     }
 }
@@ -69,7 +76,7 @@ static void cycleColor(const useconds_t wait) {
     float k;
     color_t hsvColor = {{0.0f}, {1.0f}, {1.0f}};
     // Increments of 1.0 / 360.0
-    for (k = 0.0f; k < 1.0f && led_run == 1; k += 0.00277777777777f) {
+    for (k = 0.0f; k < 1.0f && mode < ModePersistent; k += 0.00277777777777f) {
         hsvColor.h = k;
         setColor(hsv2rgb(hsvColor));
         usleep(wait);
@@ -80,7 +87,7 @@ static color_t breath(const useconds_t wait, const color_t color) {
     int r = 0, g = 0, b = 0, w = 0;
     float f, k;
     const float I = 1.0f - BREATH_LOW_INTENSITY;
-    for (k = 0.0f; k < 2.0f * M_PI && led_run == 1; k += 0.004f * M_PI) {
+    for (k = 0.0f; k < 2.0f * M_PI && mode < ModePersistent; k += 0.004f * M_PI) {
         f = I * (expf(-cosf(k)) - EXP_INVERSE) / EXP_MINUX_EXP_INVERSE + BREATH_LOW_INTENSITY;
         r = (int)(PWM_RANGE * f * color.red);
         g = (int)(PWM_RANGE * f * color.green);
@@ -114,7 +121,7 @@ static void shiftColor(const useconds_t wait, const color_t colorStart, const co
 
 static void blink(const color_t color, const float period, const uint8_t count) {
     int k;
-    for (k = 0; k < count && led_run == 1; k++) {
+    for (k = 0; k < count && mode < ModePersistent; k++) {
         setColorInRGBW(0, 0, 0, 0);
         waitWhileActive(period);
         setColor(color);
@@ -125,7 +132,7 @@ static void blink(const color_t color, const float period, const uint8_t count) 
 
 static void catchSignal() {
     printf("\nExit nicely ...\n");
-    led_run = 0;
+    mode = 0;
 }
 
 
@@ -136,23 +143,28 @@ static int handleCommand(PS_attendant *A) {
     printf("Command %s\n", A->cmd);
     switch (A->cmd[0]) {
         case 'a':
-            led_run = 1;
+            // All
+            mode = ModeCycleThrough;
+            break;
+        case 'm':
+            // Mellow mode
+            mode = ModeMellow;
             break;
         case 'b':
-            led_run = 2;
+            mode = ModePersistent;
             shiftColor(1000, currentRGBColor, (color_t){.b = 1.0f}, kColorTypeRGB);
             break;
         case 'g':
-            led_run = 2;
+            mode = ModePersistent;
             shiftColor(1000, currentRGBColor, (color_t){.g = 1.0f}, kColorTypeRGB);
             break;
         case 'r':
-            led_run = 2;
+            mode = ModePersistent;
             shiftColor(1000, currentRGBColor, (color_t){.r = 1.0f}, kColorTypeRGB);
             break;
         case 'c':
         case 'C':
-            led_run = 2;
+            mode = 2;
             k = sscanf(A->cmd, "%s %f %f %f %f", str, &newRGBColor.red, &newRGBColor.green, &newRGBColor.blue, &newRGBColor.w);
             if (k != 5) {
                 printf("Incomplete command '%s'.\n", A->cmd);
@@ -162,7 +174,7 @@ static int handleCommand(PS_attendant *A) {
             shiftColor(1000, currentRGBColor, newRGBColor, kColorTypeRGB);
             break;
         case 'w':
-            led_run = 2;
+            mode = 2;
             if (A->cmd[1] == 'w') {
                 // Warm white
                 shiftColor(1000, currentRGBColor, (color_t){.r = 0.5f, .g = 1.0f, .w = 1.0f}, kColorTypeRGB);
@@ -186,7 +198,7 @@ static int handleCommand(PS_attendant *A) {
 
 int main(int argc, char *argv[]) {
     
-    int j;
+    int j, k = 0;
     int verbose = 0;
 
     // Initialize the GPIO library
@@ -245,14 +257,12 @@ int main(int argc, char *argv[]) {
     S->port = 3000;
     PS_run(S);
 
-    uint8_t mode = 2;
-
-    while (led_run) {
-        if (led_run > 1) {
+    while (mode) {
+        if (mode == ModePersistent) {
             waitWhileActive(0.1f);
             continue;
         }
-        switch (mode) {
+        switch (k) {
             case 0:
                 // Cycle through the color wheel quickly
                 cycleColor(3000);
@@ -274,25 +284,25 @@ int main(int argc, char *argv[]) {
                 prevHSVColor.hue = newHSVColor.hue;
                 break;
             case 3:
-                for (j = 0; j < 12 && led_run == 1; j++) {
+                for (j = 0; j < 12 && mode < ModePersistent; j++) {
                     blink(hsv2rgb((color_t){{(float)j / 12.0f}, {1.0f}, {1.0f}}), 0.03f, 5);
                 }
                 break;
             case 4:
             case 5:
-                for (j = 0; j < 3 && led_run == 1; j++) {
+                for (j = 0; j < 3 && mode < ModePersistent; j++) {
                     cycleColor(10000);
                 }
                 break;
             case 8:
-                for (j = 0; j < 3 && led_run == 1; j++) {
+                for (j = 0; j < 3 && mode < ModePersistent; j++) {
                     blink((color_t) {.r = 1.0f}, 0.2f, 4);
                     blink((color_t) {.g = 1.0f}, 0.2f, 4);
                     blink((color_t) {.b = 1.0f}, 0.2f, 4);
                 }
                 break;
             case 11:
-                for (j = 0; j < 3 && led_run == 1; j++) {
+                for (j = 0; j < 3 && mode < ModePersistent; j++) {
                     blink((color_t) {.red = 1.0f}, 0.04f, 5);
                     waitWhileActive(0.4f);
                     blink((color_t) {.blue = 1.0f}, 0.04f, 5);
@@ -306,7 +316,11 @@ int main(int argc, char *argv[]) {
         if (verbose) {
             showColorValues(newRGBColor, "newRGBColor");
         }
-        mode = (mode + 1) % 12;
+        if (mode == ModeCycleThrough) {
+            k = (k + 1) % 12;
+        } else {
+            k = 10;
+        }
     }
     
     // Fade to black
