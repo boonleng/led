@@ -4,7 +4,6 @@
 #include <math.h>
 #include <signal.h>
 #include <pigpio.h>
-#include <semaphore.h>
 
 #include "color.h"
 #include "ps.h"
@@ -13,8 +12,8 @@
 #define BLUE_PIN               13
 #define GREEN_PIN              26
 #define WHITE_PIN              6
-#define PWM_RANGE              99
-#define PWM_FREQUENCY          480
+#define PWM_RANGE              49
+#define PWM_FREQUENCY          600
 #define EXP_INVERSE            0.36787944117144f
 #define EXP_MINUX_EXP_INVERSE  2.35040238728760f
 #define BREATH_LOW_INTENSITY   0.1f
@@ -26,7 +25,6 @@ color_t newHSVColor;
 color_t newRGBColor = {
     .white = 1.0f
 };
-sem_t lock;
 
 // Function implementations
 static void waitWhileActive(const float seconds) {
@@ -71,7 +69,7 @@ static void cycleColor(const useconds_t wait) {
     float k;
     color_t hsvColor = {{0.0f}, {1.0f}, {1.0f}};
     // Increments of 1.0 / 360.0
-    for (k = 0.0f; k < 1.0f && led_run; k += 0.00277777777777f) {
+    for (k = 0.0f; k < 1.0f && led_run == 1; k += 0.00277777777777f) {
         hsvColor.h = k;
         setColor(hsv2rgb(hsvColor));
         usleep(wait);
@@ -82,19 +80,13 @@ static color_t breath(const useconds_t wait, const color_t color) {
     int r = 0, g = 0, b = 0, w = 0;
     float f, k;
     const float I = 1.0f - BREATH_LOW_INTENSITY;
-    
-    led_run = 1;
-    
-    for (k = 0.0f; k < 2.0f * M_PI; k += 0.004f * M_PI) {
+    for (k = 0.0f; k < 2.0f * M_PI && led_run == 1; k += 0.004f * M_PI) {
         f = I * (expf(-cosf(k)) - EXP_INVERSE) / EXP_MINUX_EXP_INVERSE + BREATH_LOW_INTENSITY;
         r = (int)(PWM_RANGE * f * color.red);
         g = (int)(PWM_RANGE * f * color.green);
         b = (int)(PWM_RANGE * f * color.blue);
         w = (int)(PWM_RANGE * f * color.white);
         setColorInRGBW(r, g, b, w);
-        if (!led_run) {
-            break;
-        }
         usleep(wait);
     }
     return (color_t){{r}, {g}, {b}};
@@ -122,7 +114,7 @@ static void shiftColor(const useconds_t wait, const color_t colorStart, const co
 
 static void blink(const color_t color, const float period, const uint8_t count) {
     int k;
-    for (k = 0; k < count && led_run; k++) {
+    for (k = 0; k < count && led_run == 1; k++) {
         setColorInRGBW(0, 0, 0, 0);
         waitWhileActive(period);
         setColor(color);
@@ -138,37 +130,55 @@ static void catchSignal() {
 
 
 static int handleCommand(PS_attendant *A) {
-    int k, v;
+    int k;
     char str[8];
-    color_t currentRGBColor;
-    sem_getvalue(&lock, &v);
-    printf("Command %s  (lock = %d)\n", A->cmd, v);
-    sem_wait(&lock);
-    printf("Processing command ...\n");
+    color_t currentRGBColor = getColor();
+    printf("Command %s\n", A->cmd);
     switch (A->cmd[0]) {
         case 'a':
             led_run = 1;
+            break;
+        case 'b':
+            led_run = 2;
+            shiftColor(1000, currentRGBColor, (color_t){.b = 1.0f}, kColorTypeRGB);
+            break;
+        case 'g':
+            led_run = 2;
+            shiftColor(1000, currentRGBColor, (color_t){.g = 1.0f}, kColorTypeRGB);
+            break;
+        case 'r':
+            led_run = 2;
+            shiftColor(1000, currentRGBColor, (color_t){.r = 1.0f}, kColorTypeRGB);
             break;
         case 'c':
         case 'C':
             led_run = 2;
             k = sscanf(A->cmd, "%s %f %f %f %f", str, &newRGBColor.red, &newRGBColor.green, &newRGBColor.blue, &newRGBColor.w);
-            if (k == 5) {
-                //printf("Shifting to new RGBW color %.2f %.2f %.2f %.2f\n", newRGBColor.red, newRGBColor.green, newRGBColor.blue, newRGBColor.white);
-                if (A->cmd[0] == 'c') {
-                    currentRGBColor = getColor();
-                    shiftColor(1000, currentRGBColor, newRGBColor, kColorTypeRGB);
-                } else {
-                    setColor(newRGBColor);
-                }
-            } else {
+            if (k != 5) {
                 printf("Incomplete command '%s'.\n", A->cmd);
+                break;
             }
+            printf("Shifting to new RGBW color %.2f %.2f %.2f %.2f\n", newRGBColor.red, newRGBColor.green, newRGBColor.blue, newRGBColor.white);
+            shiftColor(1000, currentRGBColor, newRGBColor, kColorTypeRGB);
+            break;
+        case 'w':
+            led_run = 2;
+            if (A->cmd[1] == 'w') {
+                // Warm white
+                shiftColor(1000, currentRGBColor, (color_t){.r = 0.5f, .g = 1.0f, .w = 1.0f}, kColorTypeRGB);
+            } else if (A->cmd[1] == 'c') {
+                // Cold white
+                shiftColor(1000, currentRGBColor, (color_t){.b = 1.0f, .w = 1.0f}, kColorTypeRGB);
+            } else {
+                shiftColor(1000, currentRGBColor, (color_t){.w = 1.0f}, kColorTypeRGB);
+            }
+            break;
+        case 'q':
+            A->state = PS_STATE_CLOSING;
             break;
         default:
             break;
     }
-    sem_post(&lock);
     return 0;
 }
 
@@ -176,6 +186,7 @@ static int handleCommand(PS_attendant *A) {
 
 int main(int argc, char *argv[]) {
     
+    int j;
     int verbose = 0;
 
     // Initialize the GPIO library
@@ -214,9 +225,6 @@ int main(int argc, char *argv[]) {
         newHSVColor.h = h;
     }
 
-    // Cycle through the color wheel
-    //cycleColor(3000);
-
     shiftColor(1000,
                BLACK_COLOR,
                hsv2rgb((color_t){
@@ -229,30 +237,32 @@ int main(int argc, char *argv[]) {
     // Keep a copy as "previous"
     prevHSVColor.hue = newHSVColor.hue;
 
-//    // Fade to black
-//    shiftColor(500, getColor(), BLACK_COLOR, kColorTypeRGB);
-//    
-//    // Conclude the GPIO library
-//    gpioTerminate();
-//    return 0;
-    
-    sem_init(&lock, 0, 1);
-
+    // Socket port
     PS_server *S = PS_init();
     PS_set_terminate_function_to_builtin(S);
     PS_set_command_function(S, &handleCommand);
     PS_set_name_and_logfile(S, "LED", "led.log");
-    S->port = 10000;
+    S->port = 3000;
     PS_run(S);
-    
-    //shiftColor(1000, getColor(), CYAN_COLOR, kColorTypeRGB);
 
-    uint8_t mode = 3;
+    uint8_t mode = 2;
 
     while (led_run) {
-        sem_wait(&lock);
+        if (led_run > 1) {
+            waitWhileActive(0.1f);
+            continue;
+        }
         switch (mode) {
+            case 0:
+                // Cycle through the color wheel quickly
+                cycleColor(3000);
+                break;
             case 1:
+            case 2:
+            case 6:
+            case 7:
+            case 9:
+            case 10:
                 newHSVColor.hue = fmodf(newHSVColor.hue + 0.1f * (float)(rand()) / RAND_MAX, 1.0f);
                 newRGBColor = hsv2rgb(newHSVColor);
                 // Change color during the low intensity
@@ -262,33 +272,42 @@ int main(int argc, char *argv[]) {
                            kColorTypeRGB);
                 breath(10000, newRGBColor);
                 prevHSVColor.hue = newHSVColor.hue;
-                usleep(10);
-                break;
-            case 2:
-                cycleColor(10000);
                 break;
             case 3:
-                blink((color_t) {.r = 1.0f}, 0.2f, 4);
-                blink((color_t) {.g = 1.0f}, 0.2f, 4);
-                blink((color_t) {.r = 1.0f, .g = 1.0f}, 0.2f, 4);
+                for (j = 0; j < 12 && led_run == 1; j++) {
+                    blink(hsv2rgb((color_t){{(float)j / 12.0f}, {1.0f}, {1.0f}}), 0.03f, 5);
+                }
                 break;
             case 4:
-                blink((color_t) {.red = 1.0f}, 0.04f, 3);
-                waitWhileActive(0.4f);
-                blink((color_t) {.blue = 1.0f}, 0.04f, 3);
-                waitWhileActive(0.4f);
+            case 5:
+                for (j = 0; j < 3 && led_run == 1; j++) {
+                    cycleColor(10000);
+                }
+                break;
+            case 8:
+                for (j = 0; j < 3 && led_run == 1; j++) {
+                    blink((color_t) {.r = 1.0f}, 0.2f, 4);
+                    blink((color_t) {.g = 1.0f}, 0.2f, 4);
+                    blink((color_t) {.b = 1.0f}, 0.2f, 4);
+                }
+                break;
+            case 11:
+                for (j = 0; j < 3 && led_run == 1; j++) {
+                    blink((color_t) {.red = 1.0f}, 0.04f, 5);
+                    waitWhileActive(0.4f);
+                    blink((color_t) {.blue = 1.0f}, 0.04f, 5);
+                    waitWhileActive(0.4f);
+                }
                 break;
             default:
-                waitWhileActive(1.0f);
+                waitWhileActive(0.1f);
                 break;
         }
-        sem_post(&lock);
         if (verbose) {
             showColorValues(newRGBColor, "newRGBColor");
         }
+        mode = (mode + 1) % 12;
     }
-    
-    sem_destroy(&lock);
     
     // Fade to black
     shiftColor(1000, getColor(), BLACK_COLOR, kColorTypeRGB);
