@@ -33,6 +33,8 @@ color_t newRGBColor = {
     .white = 1.0f
 };
 
+char response[256] = "";
+
 // Function implementations
 static void waitWhileActive(const float seconds) {
     const uint32_t count = (uint32_t)(100.0f * seconds);
@@ -149,6 +151,7 @@ static int handleCommand(PS_attendant *A) {
         case 'm':
             // Mellow mode
             mode = ModeMellow;
+            sprintf(response, "Mellow mode activated.\n");
             break;
         case 'b':
             mode = ModePersistent;
@@ -158,13 +161,16 @@ static int handleCommand(PS_attendant *A) {
             mode = ModePersistent;
             shiftColor(1000, currentRGBColor, (color_t){.g = 1.0f}, kColorTypeRGB);
             break;
+        case 'h':
+            sprintf(response, "a - All mode\nm - Mellow mode\nr - Red\nb - Blue\ng - Green\nw - White\nq - Quit\n");
+            break;
         case 'r':
             mode = ModePersistent;
             shiftColor(1000, currentRGBColor, (color_t){.r = 1.0f}, kColorTypeRGB);
             break;
         case 'c':
         case 'C':
-            mode = 2;
+            mode = ModePersistent;
             k = sscanf(A->cmd, "%s %f %f %f %f", str, &newRGBColor.red, &newRGBColor.green, &newRGBColor.blue, &newRGBColor.w);
             if (k != 5) {
                 printf("Incomplete command '%s'.\n", A->cmd);
@@ -174,7 +180,7 @@ static int handleCommand(PS_attendant *A) {
             shiftColor(1000, currentRGBColor, newRGBColor, kColorTypeRGB);
             break;
         case 'w':
-            mode = 2;
+            mode = ModePersistent;
             if (A->cmd[1] == 'w') {
                 // Warm white
                 shiftColor(1000, currentRGBColor, (color_t){.r = 0.5f, .g = 1.0f, .w = 1.0f}, kColorTypeRGB);
@@ -194,10 +200,18 @@ static int handleCommand(PS_attendant *A) {
     return 0;
 }
 
+static int handleResponse(PS_attendant *A) {
+    if (strlen(response) > 0) {
+        PS_send_packets(A, response, strlen(response), NULL);
+        response[0] = '\0';
+    }
+    return 0;
+}
+
 #pragma mark - Main
 
 int main(int argc, char *argv[]) {
-    
+
     int j, k = 0;
     int verbose = 0;
 
@@ -208,7 +222,7 @@ int main(int argc, char *argv[]) {
     gpioSetPWMrange(6, PWM_RANGE);
     gpioSetMode(6, PI_OUTPUT);
     gpioPWM(6, 1);
-    
+
     // Prepare output pins
     gpioSetPWMrange(RED_PIN,   PWM_RANGE + 1);
     gpioSetPWMrange(GREEN_PIN, PWM_RANGE + 1);
@@ -245,7 +259,7 @@ int main(int argc, char *argv[]) {
                    .value = BREATH_LOW_INTENSITY
                }),
                kColorTypeRGB);
-    
+
     // Keep a copy as "previous"
     prevHSVColor.hue = newHSVColor.hue;
 
@@ -253,6 +267,7 @@ int main(int argc, char *argv[]) {
     PS_server *S = PS_init();
     PS_set_terminate_function_to_builtin(S);
     PS_set_command_function(S, &handleCommand);
+    PS_set_stream_function(S, &handleResponse);
     PS_set_name_and_logfile(S, "LED", "led.log");
     S->port = 3000;
     PS_run(S);
@@ -322,13 +337,13 @@ int main(int argc, char *argv[]) {
             k = 10;
         }
     }
-    
+
     // Fade to black
     shiftColor(1000, getColor(), BLACK_COLOR, kColorTypeRGB);
 
     // Conclude the GPIO library
     gpioTerminate();
-    
+
     return EXIT_SUCCESS;
 }
 
